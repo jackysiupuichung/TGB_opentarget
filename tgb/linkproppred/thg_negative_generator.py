@@ -7,6 +7,7 @@ import os
 import torch
 import numpy as np
 from tqdm import tqdm
+import random 
 from torch_geometric.data import TemporalData
 from tgb.utils.utils import save_pkl
 from typing import Union
@@ -270,10 +271,128 @@ class THGNegativeEdgeGenerator(object):
             save_pkl(evaluation_set, filename)
 
 
+#!/usr/bin/env python3
+"""
+Negative edge generator for OpenTargets therapeutic Target→Disease graphs.
+Preserves similar format as THGNegativeEdgeGenerator, but only samples valid Target→Disease pairs.
+"""
 
+class OpenTargetsNegativeEdgeGenerator(object):
+    """
+    Custom negative edge generator for therapeutic Target→Disease graphs.
 
+    - Keeps identical interface as THGNegativeEdgeGenerator
+    - Saves negatives in same file structure (*.pkl)
+    - Samples only valid Target→Disease pairs
+    """
 
+    def __init__(
+        self,
+        dataset_name: str,
+        node_type: torch.Tensor,
+        edge_data: TemporalData,
+        num_neg_e: int = 100,
+        rnd_seed: int = 42,
+        strategy: str = "node-type-filtered",
+    ) -> None:
+        self.dataset_name = dataset_name
+        self.edge_data = edge_data
+        self.num_neg_e = num_neg_e
+        self.strategy = strategy
+        self.rnd_seed = rnd_seed
 
+        # Reproducibility
+        torch.manual_seed(rnd_seed)
+        np.random.seed(rnd_seed)
+        random.seed(rnd_seed)
 
+        # Identify valid node sets
+        self.target_nodes = torch.where(node_type == 0)[0].tolist()
+        self.disease_nodes = torch.where(node_type == 1)[0].tolist()
 
+        print(f"✅ [OpenTargetsNegativeEdgeGenerator initialized]")
+        print(f"   Dataset:  {dataset_name}")
+        print(f"   Strategy: {strategy}")
+        print(f"   #Targets:  {len(self.target_nodes):,}")
+        print(f"   #Diseases: {len(self.disease_nodes):,}")
+        print(f"   Neg/Pos:   {num_neg_e}")
 
+    # ------------------------------------------------------------------
+    def generate_negative_samples(
+        self, pos_edges: TemporalData, split_mode: str, partial_path: str
+    ) -> str:
+        """
+        Entry point (identical signature to THGNegativeEdgeGenerator).
+        Saves negatives in:
+            {partial_path}/{dataset_name}_{split_mode}_ns.pkl
+        """
+        assert split_mode in ["val", "test"], "split_mode must be 'val' or 'test'"
+        filename = os.path.join(partial_path, f"{self.dataset_name}_{split_mode}_ns.pkl")
+
+        if os.path.exists(filename):
+            print(f"INFO: Negative samples for '{split_mode}' already exist → {filename}")
+            return filename
+
+        print(f"INFO: Generating Target→Disease negatives for split '{split_mode}'")
+
+        pos_src = pos_edges.src.cpu().numpy()
+        pos_dst = pos_edges.dst.cpu().numpy()
+        pos_t = pos_edges.t.cpu().numpy()
+        edge_type = (
+            pos_edges.edge_type.cpu().numpy()
+            if hasattr(pos_edges, "edge_type")
+            else np.zeros(len(pos_src), dtype=int)
+        )
+
+        existing_pairs = set(zip(pos_src.tolist(), pos_dst.tolist()))
+        all_targets = np.array(self.target_nodes)
+
+        out_dict = {}
+        for s, d, t, et in tqdm(zip(pos_src, pos_dst, pos_t, edge_type), total=len(pos_src)):
+            # For each disease, sample targets not linked yet
+            pos_targets = {src for (src, dst) in existing_pairs if dst == d}
+            candidates = np.setdiff1d(all_targets, list(pos_targets))
+            if len(candidates) == 0:
+                continue
+            n_sample = min(self.num_neg_e, len(candidates))
+            neg_samples = np.random.choice(candidates, n_sample, replace=False)
+            out_dict[(t, s, et)] = neg_samples
+
+        print(f"✅ Generated negatives for {len(out_dict):,} positive edges")
+        save_pkl(out_dict, filename)
+        print(f"💾 Saved negatives → {filename}")
+        return filename
+
+    # ------------------------------------------------------------------
+    def generate_negative_samples_random(
+        self, pos_edges: TemporalData, split_mode: str, partial_path: str
+    ) -> str:
+        """
+        Optional: generate random negatives (for ablation, same API).
+        """
+        filename = os.path.join(
+            partial_path, f"{self.dataset_name}_{split_mode}_ns_random.pkl"
+        )
+
+        if os.path.exists(filename):
+            print(f"INFO: Random negatives for '{split_mode}' already exist → {filename}")
+            return filename
+
+        pos_src = pos_edges.src.cpu().numpy()
+        pos_dst = pos_edges.dst.cpu().numpy()
+        pos_t = pos_edges.t.cpu().numpy()
+
+        all_nodes = np.arange(max(self.target_nodes + self.disease_nodes) + 1)
+        existing_pairs = set(zip(pos_src.tolist(), pos_dst.tolist()))
+
+        out_dict = {}
+        for s, d, t in tqdm(zip(pos_src, pos_dst, pos_t), total=len(pos_src)):
+            invalid = {dst for src, dst in existing_pairs if src == s}
+            candidates = np.setdiff1d(all_nodes, list(invalid))
+            n_sample = min(self.num_neg_e, len(candidates))
+            neg_samples = np.random.choice(candidates, n_sample, replace=False)
+            out_dict[(t, s, 0)] = neg_samples
+
+        save_pkl(out_dict, filename)
+        print(f"💾 Saved random negatives → {filename}")
+        return filename

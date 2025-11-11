@@ -45,6 +45,7 @@ DATA_URL_DICT = {
     "thgl-github": "https://object-arbutus.cloud.computecanada.ca/tgb/thgl-github.zip",
     "thgl-forum": "https://object-arbutus.cloud.computecanada.ca/tgb/thgl-forum.zip",
     "thgl-software": "https://object-arbutus.cloud.computecanada.ca/tgb/thgl-software.zip", #"https://object-arbutus.cloud.computecanada.ca/tgb/thgl-software_ns_random.zip"
+    "thgl-opentargets": "local", # Special case: data is generated locally
 }
 
 
@@ -72,6 +73,7 @@ DATA_VERSION_DICT = {
     "thgl-github": 1,
     "thgl-forum": 1,
     "thgl-software": 1,
+    "thgl-opentargets": 1,
 }
 
 
@@ -94,6 +96,7 @@ DATA_EVAL_METRIC_DICT = {
     "thgl-github": "mrr",
     "thgl-forum": "mrr",
     "thgl-software": "mrr",
+    "thgl-opentargets": "mrr",
     "tgbn-trade": "ndcg",
     "tgbn-genre": "ndcg",
     "tgbn-reddit": "ndcg",
@@ -119,6 +122,7 @@ DATA_NS_STRATEGY_DICT = {
     "thgl-github": "node-type-filtered",
     "thgl-forum": "node-type-filtered",
     "thgl-software": "node-type-filtered",
+    "thgl-opentargets": "node-type-filtered",
 }
 
 
@@ -128,3 +132,31 @@ DATA_NUM_CLASSES = {
     "tgbn-reddit": 698,
     "tgbn-token": 1001,
 }
+
+# TODO: centralise mapping in info so it can be used in negative sampler and dataset loader
+
+# ----------------------------------------------------------
+# OpenTargets specific mapping
+NODE_TYPE_MAP = {
+    "targets": 0,
+    "diseases": 1,
+    "reactome": 2,
+    "go": 3,
+    "molecule": 4
+}
+
+# TODO: investigate the transitional properties of therapeutic edges, instead of continuous score
+CLINICAL_STAGE_MAP = {
+    "Preclinical": 0,
+    "Phase 1": 0.1,
+    "Phase 2": 0.2,
+    "Phase 3": 0.7,
+    "Approved": 1
+}
+
+RELATION_TYPE_MAP = {}
+
+SOURCEID_TYPE_MAP = {}
+
+# can be 17 for source_type or 10 for relation
+OPENTARGETS_THERAPEUTIC_RELATION_ID = 10

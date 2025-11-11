@@ -120,6 +120,89 @@ def csv_to_forum_data(
         node_ids,
     )
 
+"""
+functions for thgl-opentargets dataset
+"""
+
+
+def csv_to_opentargets_data(fname: str) -> pd.DataFrame:
+    r"""
+    Used by thgl-opentargets dataset.
+
+    Converts the raw CSV edge list into a pandas DataFrame and feature array.
+    Expected CSV format:
+        year, src, dst, relation_type, score
+
+    Args:
+        fname: the path to the raw data file
+    Returns:
+        - Pandas DataFrame (edges with metadata)
+        - Numpy feature array (edge features)
+        - Dictionary (node ID mapping)
+    """
+
+    feat_size = 1  # only 'score' as numerical edge feature
+    num_lines = sum(1 for line in open(fname)) - 1
+    print("number of lines counted:", num_lines)
+
+    u_list = np.zeros(num_lines)
+    i_list = np.zeros(num_lines)
+    ts_list = np.zeros(num_lines)
+    label_list = np.zeros(num_lines)
+    edge_type = np.zeros(num_lines)
+    feat_l = np.zeros((num_lines, feat_size))
+    idx_list = np.zeros(num_lines)
+    w_list = np.ones(num_lines)
+
+    node_ids = {}
+    unique_id = 0
+
+    with open(fname, "r") as csv_file:
+        csv_reader = csv.reader(csv_file, delimiter=",")
+        idx = 0
+        for row in tqdm(csv_reader):
+            if idx == 0:  # skip header
+                idx += 1
+                continue
+
+            # year, src, dst, relation_type, score
+            ts = int(row[0])            # year
+            src = int(row[1])
+            dst = int(row[2])
+            relation = int(row[3])
+            score = float(row[4])
+
+            # Create local numeric node ids if not already mapped
+            if src not in node_ids:
+                node_ids[src] = unique_id
+                unique_id += 1
+            if dst not in node_ids:
+                node_ids[dst] = unique_id
+                unique_id += 1
+
+            u = node_ids[src]
+            i = node_ids[dst]
+
+            # Store values
+            u_list[idx - 1] = u
+            i_list[idx - 1] = i
+            ts_list[idx - 1] = ts
+            idx_list[idx - 1] = idx
+            edge_type[idx - 1] = relation
+            feat_l[idx - 1] = np.array([score])  # normalized or raw
+            idx += 1
+
+    df = pd.DataFrame({
+        "u": u_list,
+        "i": i_list,
+        "ts": ts_list,
+        "label": label_list,
+        "idx": idx_list,
+        "w": w_list,
+        "edge_type": edge_type,
+    })
+
+    return df, feat_l, node_ids
 
 
 

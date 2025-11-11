@@ -1,28 +1,42 @@
-[tool.poetry]
+[project]
 name = "py-tgb"
 version = "2.1.0"
 description = "Temporal Graph Benchmark project repo"
-authors = ["shenyang Huang <shenyang.huang@mail.mcgill.ca>", "Julia Gastinger", "Farimah Poursafaei", "Emanuele Rossi <emanuele.rossi1909@gmail.com>", "Jacob Danovitch <jacob.danovitch@mila.quebec>"]
+authors = [
+    { name = "shenyang Huang", email = "shenyang.huang@mail.mcgill.ca" },
+    { name = "Julia Gastinger" },
+    { name = "Farimah Poursafaei" },
+    { name = "Emanuele Rossi", email = "emanuele.rossi1909@gmail.com" },
+    { name = "Jacob Danovitch", email = "jacob.danovitch@mila.quebec" },
+]
+requires-python = "~=3.9"
 readme = "README.md"
-packages = [{include = "tgb"}]
+dependencies = [
+    "torch-geometric>=2.3.0,<3",
+    "tqdm>=4.65.0,<5",
+    "numpy>=2.0.2,<3",
+    "clint>=0.5.1,<0.6",
+    "requests>=2.28.2,<3",
+    "pandas>=2.2.3",
+    "scikit-learn>=1.2.2,<2",
+    "ray>=2.49.1",
+]
 
-[tool.poetry.dependencies]
-python = "^3.9"
-torch-geometric = "^2.3.0"
-tqdm = "^4.65.0"
-numpy = "^2.0.2"
-clint = "^0.5.1"
-requests = "^2.28.2"
-pandas = ">=2.2.3"
-scikit-learn = "^1.2.2"
+[dependency-groups]
+dev = [
+    "mkdocs>=1.4.3,<2",
+    "mkdocs-material>=9.1.15,<10",
+    "mkdocstrings-python>=1.1.2,<2",
+    "mkdocs-jupyter>=0.24.1,<0.25",
+    "poetry>=1.5.1,<2",
+]
 
-[tool.poetry.group.dev.dependencies]
-mkdocs = "^1.4.3"
-mkdocs-material = "^9.1.15"
-mkdocstrings-python = "^1.1.2"
-mkdocs-jupyter = "^0.24.1"
-poetry = "^1.5.1"
+[tool.hatch.build.targets.sdist]
+include = ["tgb"]
+
+[tool.hatch.build.targets.wheel]
+include = ["tgb"]
 
 [build-system]
-requires = ["poetry-core"]
-build-backend = "poetry.core.masonry.api"
+requires = ["hatchling"]
+build-backend = "hatchling.build"

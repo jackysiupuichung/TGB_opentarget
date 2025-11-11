@@ -19,7 +19,8 @@ from tgb.utils.info import (
     DATA_VERSION_DICT, 
     DATA_EVAL_METRIC_DICT, 
     DATA_NS_STRATEGY_DICT,
-    BColors
+    BColors,
+    OPENTARGETS_THERAPEUTIC_RELATION_ID
 )
 from tgb.utils.pre_process import (
     csv_to_pd_data,
@@ -31,6 +32,7 @@ from tgb.utils.pre_process import (
     csv_to_tkg_data,
     csv_to_thg_data,
     csv_to_forum_data,
+    csv_to_opentargets_data,
     csv_to_wikidata,
     csv_to_staticdata,
 )
@@ -198,6 +200,11 @@ class LinkPropPredDataset(object):
         downloads this dataset from url
         check if files are already downloaded
         """
+        
+        # ✅ Skip downloading if dataset is local
+        if self.url == "local":
+            print(f"Dataset {self.name} is local, skipping download.")
+            return
         # check if the file already exists
         if osp.exists(self.meta_dict["fname"]):
             print("raw file found, skipping download")
@@ -329,6 +336,8 @@ class LinkPropPredDataset(object):
                 df, edge_feat, node_ids = csv_to_forum_data(self.meta_dict["fname"])
             elif self.name == "thgl-software":
                 df, edge_feat, node_ids = csv_to_thg_data(self.meta_dict["fname"])
+            elif self.name == "thgl-opentargets":
+                df, edge_feat, node_ids = csv_to_opentargets_data(self.meta_dict["fname"])
             else:
                 raise ValueError(f"Dataset {self.name} not found.")
 
@@ -390,7 +399,10 @@ class LinkPropPredDataset(object):
             full_data["edge_type"] = edge_type
 
         self._full_data = full_data
-
+        if "thgl-opentargets" in self.name:
+            # TODO: time split by opentargets should be by specific years
+            print("Generating temporal splits specific for OpenTargets therapeutic edges...")
+            _train_mask, _val_mask, _test_mask = self.generate_opentargets_time_splits(full_data, therapeutic_rel_id=OPENTARGETS_THERAPEUTIC_RELATION_ID, val_ratio=0.15, test_ratio=0.15)
         if ("yago" in self.name):
             _train_mask, _val_mask, _test_mask = self.generate_splits(full_data, val_ratio=0.1, test_ratio=0.10) #99) #val_ratio=0.097, test_ratio=0.099)
         else:
@@ -428,6 +440,69 @@ class LinkPropPredDataset(object):
         test_mask = timestamps > test_time
 
         return train_mask, val_mask, test_mask
+    
+    def generate_opentargets_time_splits(
+        self,
+        full_data: Dict[str, Any],
+        therapeutic_rel_id: int = 10,
+        val_ratio: float = 0.15,
+        test_ratio: float = 0.15,
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """
+        Generates temporal train, validation, and test splits **only for therapeutic edges**
+        while retaining all other edges for graph context.
+
+        Args:
+            full_data: Dictionary with at least {'timestamps': np.ndarray}
+            relation_arr: Array of edge_type (relation) IDs, same length as timestamps
+            therapeutic_rel_id: Numeric ID of the therapeutic relation (10) or source_type (17)
+            val_ratio: Fraction of therapeutic edges for validation
+            test_ratio: Fraction of therapeutic edges for test, later than val
+
+        Returns:
+            train_mask, val_mask, test_mask : np.ndarray (bool arrays)
+                Boolean masks the same length as the full dataset, but `True`
+                only for therapeutic edges belonging to each temporal split.
+        """
+
+        timestamps = full_data["timestamps"]
+
+        # Filter timestamps for therapeutic edges
+        therapeutic_mask = full_data["edge_type"] == therapeutic_rel_id
+        therapeutic_timestamps = timestamps[therapeutic_mask]
+
+        if len(therapeutic_timestamps) == 0:
+            raise ValueError("No therapeutic edges found — check relation IDs or input data.")
+
+        # Compute temporal thresholds for val/test
+        val_time, test_time = list(
+            np.quantile(
+                therapeutic_timestamps,
+                [(1 - val_ratio - test_ratio), (1 - test_ratio)],
+            )
+        )
+
+        # Initialize boolean masks (same length as full_data)
+        train_mask = np.zeros_like(timestamps, dtype=bool)
+        val_mask = np.zeros_like(timestamps, dtype=bool)
+        test_mask = np.zeros_like(timestamps, dtype=bool)
+
+        # Apply splits **only for therapeutic edges**
+        train_mask = np.logical_and(therapeutic_mask, timestamps <= val_time)
+        val_mask = np.logical_and.reduce(
+            [therapeutic_mask, timestamps > val_time, timestamps <= test_time]
+        )
+        test_mask = np.logical_and(therapeutic_mask, timestamps > test_time)
+
+        print(
+            f"✅ Therapeutic split — "
+            f"{train_mask.sum():,} train / {val_mask.sum():,} val / {test_mask.sum():,} test "
+            f"({therapeutic_mask.sum():,} total therapeutic edges)"
+        )
+
+        return train_mask, val_mask, test_mask
+
+
     
     def preprocess_static_edges(self):
         """
