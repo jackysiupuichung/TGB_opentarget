@@ -330,6 +330,7 @@ for run_idx in range(NUM_RUNS):
         set(model['memory'].parameters()) | set(model['gnn'].parameters()) | set(model['link_pred'].parameters()),
         lr=LR,
     )
+    # TODO is this more appropiate for 
     criterion = torch.nn.BCEWithLogitsLoss()
 
     # Helper vector to map global node indices to local ones.

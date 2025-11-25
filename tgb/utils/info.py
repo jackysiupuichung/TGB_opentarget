@@ -138,8 +138,8 @@ DATA_NUM_CLASSES = {
 # ----------------------------------------------------------
 # OpenTargets specific mapping
 NODE_TYPE_MAP = {
-    "targets": 0,
-    "diseases": 1,
+    "target": 0,
+    "disease": 1,
     "reactome": 2,
     "go": 3,
     "molecule": 4
@@ -153,10 +153,45 @@ CLINICAL_STAGE_MAP = {
     "Phase 3": 0.7,
     "Approved": 1
 }
+RELATION_TYPE_MAP = {
+    "affected_pathway": 0,
+    "literature": 1,
+    "genetic_association": 2,
+    "interacts_with": 3,
+    "gene_ontology_annotation": 4,
+    "is_subpathway_of": 5,
+    "somatic_mutation": 6,
+    "rna_expression": 7,
+    "involved_in": 8,
+    "animal_model": 9,
+    "clinical_trial": 10,
+    "modulated_by": 11,
+    "is_subtype_of": 12,
+    "associated_with": 13,
+}
 
-RELATION_TYPE_MAP = {}
-
-SOURCEID_TYPE_MAP = {}
-
-# can be 17 for source_type or 10 for relation
-OPENTARGETS_THERAPEUTIC_RELATION_ID = 10
+SOURCEID_TYPE_MAP = {
+    "sysbio": 0,
+    "europepmc": 1,
+    "genomics_england": 2,
+    "interactionEvidence": 3,
+    "crispr": 4,
+    "crispr_screen": 5,
+    "gene_ontology": 6,
+    "reactome": 7,
+    "eva_somatic": 8,
+    "expression_atlas": 9,
+    "slapenrich": 10,
+    "orphanet": 11,
+    "gene2phenotype": 12,
+    "uniprot_literature": 13,
+    "eva": 14,
+    "impc": 15,
+    "cancer_gene_census": 16,
+    "chembl": 17,
+    "cancer_biomarkers": 18,
+    "disease_ontology": 19,
+    "clingen": 20,
+    "uniprot_variants": 21,
+    "gene_burden": 22,
+}

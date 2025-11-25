@@ -24,27 +24,7 @@ import csv
 import os
 import argparse
 from collections import defaultdict
-
-
-# ===========================================================
-# CONFIG
-# ===========================================================
-NODE_TYPE_MAP = {
-    "targets": 0,
-    "diseases": 1,
-    "reactome": 2,
-    "go": 3,
-    "molecule": 4
-}
-
-# TODO: use to model the transitional properties of therapeutic edges, instead of continuous score
-CLINICAL_STAGE_MAP = {
-    "Preclinical": 0,
-    "Phase 1": 0.1,
-    "Phase 2": 0.2,
-    "Phase 3": 0.7,
-    "Approved": 1
-}
+from tgb.utils.info import NODE_TYPE_MAP, RELATION_TYPE_MAP, CLINICAL_STAGE_MAP, SOURCEID_TYPE_MAP
 
 
 # ===========================================================
@@ -55,17 +35,27 @@ def get_or_add_node(node_name, node_type, node_dict, node_type_dict):
     if node_name not in node_dict:
         node_id = len(node_dict)
         node_dict[node_name] = node_id
-        node_type_dict[node_id] = NODE_TYPE_MAP.get(node_type, 99)
-        if node_type_dict[node_id] == 99:
+        curr_node_type = NODE_TYPE_MAP.get(node_type, 99)
+        if curr_node_type == 99:
             print(f"⚠️  WARNING: Unknown node type '{node_type}' for node '{node_name}'")
+        else:
+            node_type_dict[node_id] = curr_node_type
     return node_dict[node_name]
 
 
-def get_or_add_relation(rel_name, relation_dict):
-    """Return numeric relation ID"""
-    if rel_name not in relation_dict:
-        relation_dict[rel_name] = len(relation_dict)
-    return relation_dict[rel_name]
+def get_or_add_relation(rel_name, relation_dict, RELATION_TYPE_MAP):
+    """Return numeric relation ID based on RELATION_TYPE_MAP or add new"""
+    if rel_name in RELATION_TYPE_MAP:
+        rel_id = RELATION_TYPE_MAP[rel_name]
+    else:
+        # Assign dynamically if not predefined
+        rel_id = len(RELATION_TYPE_MAP)
+        print(f"⚠️  WARNING: Unknown relation '{rel_name}' — assigning new ID {rel_id}")
+        RELATION_TYPE_MAP[rel_name] = rel_id
+
+    # Record relation in relation_dict (for reverse lookup or reference)
+    relation_dict[rel_name] = rel_id
+    return rel_id
 
 
 def write_mapping_csv(mapping, outname, headers):
@@ -123,9 +113,24 @@ def main(data_dir, relation_mode):
     edges = pd.concat([pd.read_parquet(f) for f in edge_files], ignore_index=True)
     print(f"✅ Loaded {len(edges):,} edges from {len(edge_files)} files")
 
-    node_dict, node_type_dict, relation_dict = {}, {}, {}
+    # Initialize structures
+    node_dict = {}
+    node_type_dict = {}
+    relation_dict = {}
     out_dict = defaultdict(dict)
     skipped_edges = []
+
+    # Select correct mapping for relations
+    if relation_mode == "relation":
+        relation_map = RELATION_TYPE_MAP
+        relation_field = "relation"
+    elif relation_mode == "datasourceId":
+        relation_map = SOURCEID_TYPE_MAP
+        relation_field = "datasourceId"
+    else:
+        raise ValueError("relation_mode must be either 'relation' or 'datasourceId'")
+
+    print(f"🔹 Using relation field: '{relation_field}' with predefined map ({len(relation_map)} entries)")
 
     print("🔹 Building temporal heterogeneous graph data ...")
 
@@ -134,8 +139,7 @@ def main(data_dir, relation_mode):
         dst = row["target"]
         src_type = row["source_type"]
         dst_type = row["target_type"]
-        rel = row["relation"]
-        ds = row["datasourceId"]
+        rel_label = row[relation_field]
         score = float(row["score"]) if pd.notna(row["score"]) else 0.0
         year = int(row["year"]) if not pd.isna(row["year"]) else 0
 
@@ -148,8 +152,7 @@ def main(data_dir, relation_mode):
                 "target": dst,
                 "source_type": src_type,
                 "target_type": dst_type,
-                "relation": rel,
-                "datasourceId": ds,
+                "relation": rel_label,
                 "score": score
             })
             continue
@@ -158,17 +161,10 @@ def main(data_dir, relation_mode):
         src_id = get_or_add_node(src, src_type, node_dict, node_type_dict)
         dst_id = get_or_add_node(dst, dst_type, node_dict, node_type_dict)
 
-        # Relation label (based on user choice)
-        if relation_mode == "relation":
-            rel_label = rel
-        elif relation_mode == "datasourceId":
-            rel_label = ds
-        else:
-            raise ValueError("relation_mode must be either 'relation' or 'datasourceId'")
+        # Relation ID (uses correct mapping)
+        rel_id = get_or_add_relation(rel_label, relation_dict, relation_map)
 
-        rel_id = get_or_add_relation(rel_label, relation_dict)
-
-        # Temporal graph edge
+        # Temporal edge record
         out_dict[year][(src_id, dst_id, rel_id)] = (score,)
 
     # Write outputs
@@ -179,16 +175,15 @@ def main(data_dir, relation_mode):
     write_mapping_csv(node_dict, out_nodemap_csv, ["node_name", "node_id"])
     write_mapping_csv(node_type_dict, out_nodetype_csv, ["node_id", "node_type"])
     write_mapping_csv(NODE_TYPE_MAP, out_nodetypemapping_csv, ["node_type_label", "node_type_id"])
-    write_mapping_csv(relation_dict, out_relmap_csv, ["relation_label", "relation_id"])
+    write_mapping_csv(relation_dict, out_relmap_csv, [f"{relation_field}_label", f"{relation_field}_id"])
     write_edges(out_dict, out_edge_csv)
     write_skipped_edges(skipped_edges, out_skipped_csv)
-    
 
     print("\n✅ Graph export complete:")
     print(f"   • Edges → {out_edge_csv}")
     print(f"   • Node mappings → {out_nodemap_csv}")
     print(f"   • Node types → {out_nodetype_csv}")
-    print(f"✅ Node type mapping → {out_nodetypemapping_csv}")
+    print(f"   • Node type mapping → {out_nodetypemapping_csv}")
     print(f"   • Relation mapping → {out_relmap_csv}")
     print(f"   • Skipped edges log → {out_skipped_csv}")
 

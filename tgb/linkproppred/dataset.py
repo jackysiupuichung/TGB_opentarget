@@ -20,7 +20,8 @@ from tgb.utils.info import (
     DATA_EVAL_METRIC_DICT, 
     DATA_NS_STRATEGY_DICT,
     BColors,
-    OPENTARGETS_THERAPEUTIC_RELATION_ID
+    RELATION_TYPE_MAP,
+    SOURCEID_TYPE_MAP
 )
 from tgb.utils.pre_process import (
     csv_to_pd_data,
@@ -402,7 +403,17 @@ class LinkPropPredDataset(object):
         if "thgl-opentargets" in self.name:
             # TODO: time split by opentargets should be by specific years
             print("Generating temporal splits specific for OpenTargets therapeutic edges...")
-            _train_mask, _val_mask, _test_mask = self.generate_opentargets_time_splits(full_data, therapeutic_rel_id=OPENTARGETS_THERAPEUTIC_RELATION_ID, val_ratio=0.15, test_ratio=0.15)
+            if full_data["edge_type"].unique().shape[0] == len(RELATION_TYPE_MAP):
+                # If the key contains the word "clinical", use that as therapeutic_rel_id
+                therapeutic_rel_id = RELATION_TYPE_MAP["clinical_trial"]
+                print("Using relation IDs for therapeutic edges.")
+            elif full_data["edge_type"].unique().shape[0] == len(SOURCEID_TYPE_MAP):
+                print("Using datasource IDs for therapeutic edges.")
+                therapeutic_rel_id = SOURCEID_TYPE_MAP["chembl"]
+            else:
+                print("⚠️  WARNING: Relation/source_type IDs do not match known OpenTargets mappings.")
+                return NameError("Cannot identify therapeutic relation/source_type IDs.")
+            _train_mask, _val_mask, _test_mask = self.generate_opentargets_time_splits(full_data, therapeutic_rel_id=therapeutic_rel_id, val_ratio=0.15, test_ratio=0.15)
         if ("yago" in self.name):
             _train_mask, _val_mask, _test_mask = self.generate_splits(full_data, val_ratio=0.1, test_ratio=0.10) #99) #val_ratio=0.097, test_ratio=0.099)
         else:
