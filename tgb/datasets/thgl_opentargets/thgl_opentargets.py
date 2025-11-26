@@ -24,6 +24,7 @@ import csv
 import os
 import argparse
 from collections import defaultdict
+from tqdm import tqdm
 from tgb.utils.info import NODE_TYPE_MAP, RELATION_TYPE_MAP, CLINICAL_STAGE_MAP, SOURCEID_TYPE_MAP
 
 
@@ -134,9 +135,9 @@ def main(data_dir, relation_mode):
 
     print("🔹 Building temporal heterogeneous graph data ...")
 
-    for _, row in edges.iterrows():
-        src = row["source"]
-        dst = row["target"]
+    for _, row in tqdm(edges.iterrows(), total=len(edges), desc="Processing edges"):
+        src = row["sourceId"]
+        dst = row["targetId"]
         src_type = row["source_type"]
         dst_type = row["target_type"]
         rel_label = row[relation_field]
