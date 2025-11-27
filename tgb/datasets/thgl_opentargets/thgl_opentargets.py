@@ -15,7 +15,6 @@ Output:
 Usage:
     python build_thgl_opentargets.py \
         --data_dir /path/to/opentarget_het_graph \
-        --relation_mode relation        # (or "source_type")
 """
 
 import pandas as pd
@@ -95,8 +94,8 @@ def write_skipped_edges(skipped_list, outname):
 # ===========================================================
 # MAIN
 # ===========================================================
-def main(data_dir, relation_mode):
-    edge_dir = os.path.join(data_dir, "data/kg_output/edges")
+def main(data_dir):
+    edge_dir = os.path.join(data_dir, "kg_output/edges")
     script_dir = os.path.dirname(os.path.abspath(__file__))
 
     out_edge_csv = os.path.join(script_dir, "thgl-opentargets_edgelist.csv")
@@ -104,9 +103,9 @@ def main(data_dir, relation_mode):
     out_nodetype_csv = os.path.join(script_dir, "thgl-opentargets_nodetype.csv")
     out_nodetypemapping_csv = os.path.join(script_dir, "thgl-opentargets_nodetype_mapping.csv")
     out_relmap_csv = os.path.join(script_dir, "thgl-opentargets_relation_mapping.csv")
+    out_sourcemap_csv = os.path.join(script_dir, "thgl-opentargets_datasource_mapping.csv")
     out_skipped_csv = os.path.join(script_dir, "thgl-opentargets_skipped_edges.csv")
 
-    print(f"🔹 Relation mode: {relation_mode}")
     print("🔹 Loading all edge parquet files...")
     edge_files = glob.glob(f"{edge_dir}/*.parquet")
     if not edge_files:
@@ -118,31 +117,21 @@ def main(data_dir, relation_mode):
     node_dict = {}
     node_type_dict = {}
     relation_dict = {}
+    datasource_dict = {}
     out_dict = defaultdict(dict)
     skipped_edges = []
-
-    # Select correct mapping for relations
-    if relation_mode == "relation":
-        relation_map = RELATION_TYPE_MAP
-        relation_field = "relation"
-    elif relation_mode == "datasourceId":
-        relation_map = SOURCEID_TYPE_MAP
-        relation_field = "datasourceId"
-    else:
-        raise ValueError("relation_mode must be either 'relation' or 'datasourceId'")
-
-    print(f"🔹 Using relation field: '{relation_field}' with predefined map ({len(relation_map)} entries)")
 
     print("🔹 Building temporal heterogeneous graph data ...")
 
     for _, row in tqdm(edges.iterrows(), total=len(edges), desc="Processing edges"):
-        src = row["sourceId"]
-        dst = row["targetId"]
-        src_type = row["source_type"]
-        dst_type = row["target_type"]
-        rel_label = row[relation_field]
+        src = row.get("sourceId")
+        dst = row.get("targetId")
+        src_type = row.get("source_type")
+        dst_type = row.get("target_type")
+        relation_label = row.get("relation")
+        datasource_label = row.get("datasourceId")
         score = float(row["score"]) if pd.notna(row["score"]) else 0.0
-        year = int(row["year"]) if not pd.isna(row["year"]) else 0
+        year = int(row["year"]) if not pd.isna(row["year"]) else pd.NA
 
         # ✅ SAFETY CHECK
         if pd.isna(src_type) or pd.isna(dst_type) or \
@@ -154,6 +143,7 @@ def main(data_dir, relation_mode):
                 "source_type": src_type,
                 "target_type": dst_type,
                 "relation": rel_label,
+                "datasource": datasource_label,
                 "score": score
             })
             continue
@@ -162,11 +152,12 @@ def main(data_dir, relation_mode):
         src_id = get_or_add_node(src, src_type, node_dict, node_type_dict)
         dst_id = get_or_add_node(dst, dst_type, node_dict, node_type_dict)
 
-        # Relation ID (uses correct mapping)
-        rel_id = get_or_add_relation(rel_label, relation_dict, relation_map)
+        # Relation & Datasource IDs
+        rel_id = get_or_add_relation(relation_label, relation_dict, RELATION_TYPE_MAP)
+        src_id_ds = get_or_add_relation(datasource_label, datasource_dict, SOURCEID_TYPE_MAP)
 
         # Temporal edge record
-        out_dict[year][(src_id, dst_id, rel_id)] = (score,)
+        out_dict[year][(src_id, dst_id, rel_id, src_id_ds)] = (score,)
 
     # Write outputs
     print(f"✅ Constructed temporal edges for {len(out_dict)} years")
@@ -177,6 +168,7 @@ def main(data_dir, relation_mode):
     write_mapping_csv(node_type_dict, out_nodetype_csv, ["node_id", "node_type"])
     write_mapping_csv(NODE_TYPE_MAP, out_nodetypemapping_csv, ["node_type_name", "node_type"])
     write_mapping_csv(relation_dict, out_relmap_csv, [f"relation_name", f"relation"])
+    write_mapping_csv(datasource_dict, out_sourcemap_csv, ["datasource_name", "datasource"])
     write_edges(out_dict, out_edge_csv)
     write_skipped_edges(skipped_edges, out_skipped_csv)
 
@@ -186,6 +178,7 @@ def main(data_dir, relation_mode):
     print(f"   • Node types → {out_nodetype_csv}")
     print(f"   • Node type mapping → {out_nodetypemapping_csv}")
     print(f"   • Relation mapping → {out_relmap_csv}")
+    print(f"   • Datasource mapping → {out_sourcemap_csv}")
     print(f"   • Skipped edges log → {out_skipped_csv}")
 
 
@@ -195,13 +188,6 @@ def main(data_dir, relation_mode):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Construct a Temporal Heterogeneous Graph (THGL) from Open Targets.")
     parser.add_argument("--data_dir", type=str, required=True, help="Base directory containing data/kg_output/edges/")
-    parser.add_argument(
-        "--relation_mode",
-        type=str,
-        choices=["relation", "datasourceId"],
-        default="relation",
-        help="Choose how to define the relation type: 'relation' or 'datasourceId'."
-    )
     args = parser.parse_args()
 
-    main(args.data_dir, args.relation_mode)
+    main(args.data_dir)
