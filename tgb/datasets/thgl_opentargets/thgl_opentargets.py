@@ -175,8 +175,8 @@ def main(data_dir, relation_mode):
 
     write_mapping_csv(node_dict, out_nodemap_csv, ["node_name", "node_id"])
     write_mapping_csv(node_type_dict, out_nodetype_csv, ["node_id", "node_type"])
-    write_mapping_csv(NODE_TYPE_MAP, out_nodetypemapping_csv, ["node_type_label", "node_type_id"])
-    write_mapping_csv(relation_dict, out_relmap_csv, [f"{relation_field}_label", f"{relation_field}_id"])
+    write_mapping_csv(NODE_TYPE_MAP, out_nodetypemapping_csv, ["node_type_name", "node_type"])
+    write_mapping_csv(relation_dict, out_relmap_csv, [f"relation_name", f"relation"])
     write_edges(out_dict, out_edge_csv)
     write_skipped_edges(skipped_edges, out_skipped_csv)
 
