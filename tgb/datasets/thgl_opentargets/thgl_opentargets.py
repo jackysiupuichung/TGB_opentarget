@@ -1,193 +1,251 @@
 #!/usr/bin/env python3
 """
-Construct a temporal heterogeneous graph (THGL) from the Open Targets Platform edges.
+Construct a Temporal Heterogeneous Graph (THGL) from Open Targets evidence
+(dynamic edges only).
 
-Input schema (per parquet):
-    source, target, source_type, target_type, relation, datasourceId, score, year, id
-
-Output:
-    - thgl-opentargets_edgelist.csv
-    - thgl-opentargets_nodeIDmapping.csv
-    - thgl-opentargets_nodetype.csv
-    - thgl-opentargets_relation_mapping.csv
-    - thgl-opentargets_skipped_edges.csv
-
-Usage:
-    python build_thgl_opentargets.py \
-        --data_dir /path/to/opentarget_het_graph \
+Time is represented as discrete yearly snapshots.
+Static edges are ignored in this version.
 """
 
-import pandas as pd
-import glob
+import argparse
 import csv
 import os
-import argparse
+import pandas as pd
 from collections import defaultdict
-from tqdm import tqdm
-from tgb.utils.info import NODE_TYPE_MAP, RELATION_TYPE_MAP, CLINICAL_STAGE_MAP, SOURCEID_TYPE_MAP
 
 
 # ===========================================================
-# FUNCTIONS
+# IO
 # ===========================================================
-def get_or_add_node(node_name, node_type, node_dict, node_type_dict):
-    """Return existing node_id or create a new one"""
-    if node_name not in node_dict:
-        node_id = len(node_dict)
-        node_dict[node_name] = node_id
-        curr_node_type = NODE_TYPE_MAP.get(node_type, 99)
-        if curr_node_type == 99:
-            print(f"⚠️  WARNING: Unknown node type '{node_type}' for node '{node_name}'")
-        else:
-            node_type_dict[node_id] = curr_node_type
-    return node_dict[node_name]
+def load_opentargets_parquet(fname):
+    df = pd.read_parquet(fname)
+    print(f"Loaded {len(df):,} rows from {fname}")
+    return df
 
 
-def get_or_add_relation(rel_name, relation_dict, RELATION_TYPE_MAP):
-    """Return numeric relation ID based on RELATION_TYPE_MAP or add new"""
-    if rel_name in RELATION_TYPE_MAP:
-        rel_id = RELATION_TYPE_MAP[rel_name]
-    else:
-        # Assign dynamically if not predefined
-        rel_id = len(RELATION_TYPE_MAP)
-        print(f"⚠️  WARNING: Unknown relation '{rel_name}' — assigning new ID {rel_id}")
-        RELATION_TYPE_MAP[rel_name] = rel_id
+def extract_dynamic_edges(df):
+    dynamic = df[df["year"].notna()].reset_index(drop=True)
+    print(f"Dynamic edges: {len(dynamic):,}")
+    return dynamic
 
-    # Record relation in relation_dict (for reverse lookup or reference)
-    relation_dict[rel_name] = rel_id
-    return rel_id
+def extract_static_edges(df):
+    static = df[df["year"].isna()].reset_index(drop=True)
+    print(f"Static edges: {len(static):,}")
+    return static
 
 
-def write_mapping_csv(mapping, outname, headers):
-    """Generic CSV writer for mapping dicts"""
-    os.makedirs(os.path.dirname(outname), exist_ok=True)
-    with open(outname, "w", newline="") as f:
+# ===========================================================
+# GRAPH CONSTRUCTION (GitHub-style temporal snapshots)
+# ===========================================================
+def load_edgelist(dynamic_edges):
+    """
+    Returns:
+        node_dict           {node_name: node_id}
+        node_type_dict      {node_id: node_type_id}
+        edge_dict           {year: {(h, t, r): 1}}
+        rel_type_dict       {relation_name: rel_id}
+        node_type_mapping   {node_type_name: node_type_id}
+    """
+    node_dict = {}
+    node_type_dict = {}
+    node_type_mapping = {}
+    rel_type_dict = {}
+    edge_dict = defaultdict(dict)
+
+    num_edges = 0
+
+    for _, row in dynamic_edges.iterrows():
+        ts = int(row["year"])
+        head = row["sourceId"]
+        tail = row["targetId"]
+        # combination of data source and relation type
+        rel = row["relation_key"]
+
+        head_type = row["source_type"]
+        tail_type = row["target_type"]
+
+        # node types
+        for t in (head_type, tail_type):
+            if t not in node_type_mapping:
+                node_type_mapping[t] = len(node_type_mapping)
+
+        # nodes
+        if head not in node_dict:
+            node_dict[head] = len(node_dict)
+            node_type_dict[node_dict[head]] = node_type_mapping[head_type]
+
+        if tail not in node_dict:
+            node_dict[tail] = len(node_dict)
+            node_type_dict[node_dict[tail]] = node_type_mapping[tail_type]
+
+        # relations
+        if rel not in rel_type_dict:
+            rel_type_dict[rel] = len(rel_type_dict)
+
+        edge = (
+            node_dict[head],
+            node_dict[tail],
+            rel_type_dict[rel]
+        )
+
+        edge_dict[ts][edge] = 1
+        num_edges += 1
+
+    print(f"There are {len(node_dict):,} nodes")
+    print(f"There are {num_edges:,} temporal edges")
+    print(f"There are {len(edge_dict):,} timesteps")
+
+    return node_dict, node_type_dict, edge_dict, rel_type_dict, node_type_mapping
+
+def load_static_edgelist(static_edges, node_dict, node_type_dict, rel_type_dict, node_type_mapping):
+    """
+    Update the existing dictionaries with static edges.
+    Returns:
+        node_dict           {node_name: node_id}
+        node_type_dict      {node_id: node_type_id}
+        edge_dict           {year: {(h, t, r): 1}}
+        rel_type_dict       {relation_name: rel_id}
+        node_type_mapping   {node_type_name: node_type_id}
+    """
+    static_edge_dict = defaultdict(dict)
+    num_static_edges = 0
+
+    for _, row in static_edges.iterrows():
+        head = row["sourceId"]
+        tail = row["targetId"]
+        rel = row["relation_key"]
+
+        head_type = row["source_type"]
+        tail_type = row["target_type"]
+
+        # node types
+        for t in (head_type, tail_type):
+            if t not in node_type_mapping:
+                node_type_mapping[t] = len(node_type_mapping)
+
+        # nodes
+        if head not in node_dict:
+            node_dict[head] = len(node_dict)
+            node_type_dict[node_dict[head]] = node_type_mapping[head_type]
+
+        if tail not in node_dict:
+            node_dict[tail] = len(node_dict)
+            node_type_dict[node_dict[tail]] = node_type_mapping[tail_type]
+
+        # relations
+        if rel not in rel_type_dict:
+            rel_type_dict[rel] = len(rel_type_dict)
+
+        edge = (
+            node_dict[head],
+            node_dict[tail],
+            rel_type_dict[rel]
+        )
+
+        # Static edges can be assigned to a special timestamp, e.g., 0
+        static_edge_dict[0][edge] = 1
+        num_static_edges += 1
+
+    print(f"After adding static edges:")
+    print(f"There are {len(node_dict):,} nodes")
+    print(f"There are {num_static_edges:,} static edges added")
+    print(f"There are {len(static_edge_dict):,} timesteps")
+
+    return node_dict, node_type_dict, static_edge_dict, rel_type_dict, node_type_mapping
+
+# ===========================================================
+# WRITERS
+# ===========================================================
+def write_edgelist(edge_dict, outname):
+    num_lines = 0
+    with open(outname, "w") as f:
         writer = csv.writer(f)
-        writer.writerow(headers)
-        for k, v in mapping.items():
+        writer.writerow(["timestamp", "head", "tail", "relation_type"])
+
+        for ts in sorted(edge_dict):
+            for h, t, r in edge_dict[ts]:
+                writer.writerow([ts, h, t, r])
+                num_lines += 1
+
+    print(f"Wrote {num_lines:,} edges → {outname}")
+
+def write_static_edgelist(static_edge_dict, outname):
+    num_lines = 0
+    with open(outname, "w") as f:
+        writer = csv.writer(f)
+        writer.writerow(["timestamp", "head", "tail", "relation_type"])
+
+        for ts in sorted(static_edge_dict):
+            for h, t, r in static_edge_dict[ts]:
+                writer.writerow([ts, h, t, r])
+                num_lines += 1
+
+    print(f"Wrote {num_lines:,} static edges → {outname}")
+
+def write_node_types(node_type_dict, outname):
+    with open(outname, "w") as f:
+        writer = csv.writer(f)
+        writer.writerow(["node_id", "type"])
+        for nid, ntype in node_type_dict.items():
+            writer.writerow([nid, ntype])
+
+
+def write_relation_mapping(rel_type_dict, outname):
+    with open(outname, "w") as f:
+        writer = csv.writer(f)
+        writer.writerow(["relation_name", "relation_id"])
+        for r, rid in rel_type_dict.items():
+            writer.writerow([r, rid])
+
+
+def write_node_type_mapping(node_type_mapping, outname):
+    with open(outname, "w") as f:
+        writer = csv.writer(f)
+        writer.writerow(["node_type_name", "node_type_id"])
+        for k, v in node_type_mapping.items():
             writer.writerow([k, v])
-
-
-def write_edges(out_dict, outname):
-    os.makedirs(os.path.dirname(outname), exist_ok=True)
-    with open(outname, "w", newline="") as f:
-        writer = csv.writer(f)
-        writer.writerow(["year", "src", "dst", "relation_type", "score"])
-        for year in sorted(out_dict.keys()):
-            for edge, vals in out_dict[year].items():
-                src, dst, rel = edge
-                score = vals[0]
-                writer.writerow([year, src, dst, rel, score])
-
-
-def write_skipped_edges(skipped_list, outname):
-    """Log edges skipped due to missing or unknown node types"""
-    os.makedirs(os.path.dirname(outname), exist_ok=True)
-    if skipped_list:
-        df = pd.DataFrame(skipped_list)
-        df.to_csv(outname, index=False)
-        print(f"⚠️  Logged {len(df)} skipped edges → {outname}")
-    else:
-        print("✅ No skipped edges.")
 
 
 # ===========================================================
 # MAIN
 # ===========================================================
 def main(data_dir):
-    edge_dir = os.path.join(data_dir, "kg_output/edges")
-    script_dir = os.path.dirname(os.path.abspath(__file__))
+    parquet_file = os.path.join(
+        data_dir,
+        "progression_graph",
+        "datasource_harmonic.parquet"
+    )
 
-    out_edge_csv = os.path.join(script_dir, "thgl-opentargets_edgelist.csv")
-    out_nodemap_csv = os.path.join(script_dir, "thgl-opentargets_nodeIDmapping.csv")
-    out_nodetype_csv = os.path.join(script_dir, "thgl-opentargets_nodetype.csv")
-    out_nodetypemapping_csv = os.path.join(script_dir, "thgl-opentargets_nodetype_mapping.csv")
-    out_relmap_csv = os.path.join(script_dir, "thgl-opentargets_relation_mapping.csv")
-    out_sourcemap_csv = os.path.join(script_dir, "thgl-opentargets_datasource_mapping.csv")
-    out_skipped_csv = os.path.join(script_dir, "thgl-opentargets_skipped_edges.csv")
+    out_prefix = os.path.join(data_dir, "thgl", "thgl-opentargets")
 
-    print("🔹 Loading all edge parquet files...")
-    edge_files = glob.glob(f"{edge_dir}/*.parquet")
-    if not edge_files:
-        raise FileNotFoundError(f"No parquet files found in {edge_dir}")
-    edges = pd.concat([pd.read_parquet(f) for f in edge_files], ignore_index=True)
-    print(f"✅ Loaded {len(edges):,} edges from {len(edge_files)} files")
+    df = load_opentargets_parquet(parquet_file)
+    dynamic_edges = extract_dynamic_edges(df)
+    static_edges = extract_static_edges(df)
 
-    # Initialize structures
-    node_dict = {}
-    node_type_dict = {}
-    relation_dict = {}
-    datasource_dict = {}
-    out_dict = defaultdict(dict)
-    skipped_edges = []
+    node_dict, node_type_dict, edge_dict, rel_type_dict, node_type_mapping = load_edgelist(dynamic_edges)
+    node_dict, node_type_dict, static_edge_dict, rel_type_dict, node_type_mapping = load_static_edgelist(
+        static_edges, node_dict, node_type_dict, rel_type_dict, node_type_mapping
+    )
 
-    print("🔹 Building temporal heterogeneous graph data ...")
+    # placeholder for finding node features from node_dict
 
-    for _, row in tqdm(edges.iterrows(), total=len(edges), desc="Processing edges"):
-        src = row.get("sourceId")
-        dst = row.get("targetId")
-        src_type = row.get("source_type")
-        dst_type = row.get("target_type")
-        relation_label = row.get("relation")
-        datasource_label = row.get("datasourceId")
-        score = float(row["score"]) if pd.notna(row["score"]) else 0.0
-        year = int(row["year"]) if not pd.isna(row["year"]) else pd.NA
-
-        # ✅ SAFETY CHECK
-        if pd.isna(src_type) or pd.isna(dst_type) or \
-           src_type not in NODE_TYPE_MAP or dst_type not in NODE_TYPE_MAP:
-            skipped_edges.append({
-                "year": year,
-                "source": src,
-                "target": dst,
-                "source_type": src_type,
-                "target_type": dst_type,
-                "relation": rel_label,
-                "datasource": datasource_label,
-                "score": score
-            })
-            continue
-
-        # Nodes
-        src_id = get_or_add_node(src, src_type, node_dict, node_type_dict)
-        dst_id = get_or_add_node(dst, dst_type, node_dict, node_type_dict)
-
-        # Relation & Datasource IDs
-        rel_id = get_or_add_relation(relation_label, relation_dict, RELATION_TYPE_MAP)
-        src_id_ds = get_or_add_relation(datasource_label, datasource_dict, SOURCEID_TYPE_MAP)
-
-        # Temporal edge record
-        out_dict[year][(src_id, dst_id, rel_id, src_id_ds)] = (score,)
-
-    # Write outputs
-    print(f"✅ Constructed temporal edges for {len(out_dict)} years")
-    print(f"✅ Unique nodes: {len(node_dict):,}, relations: {len(relation_dict):,}")
-    print(f"⚠️  Skipped {len(skipped_edges):,} edges due to missing or unknown node types")
-
-    write_mapping_csv(node_dict, out_nodemap_csv, ["node_name", "node_id"])
-    write_mapping_csv(node_type_dict, out_nodetype_csv, ["node_id", "node_type"])
-    write_mapping_csv(NODE_TYPE_MAP, out_nodetypemapping_csv, ["node_type_name", "node_type"])
-    write_mapping_csv(relation_dict, out_relmap_csv, [f"relation_name", f"relation"])
-    write_mapping_csv(datasource_dict, out_sourcemap_csv, ["datasource_name", "datasource"])
-    write_edges(out_dict, out_edge_csv)
-    write_skipped_edges(skipped_edges, out_skipped_csv)
-
-    print("\n✅ Graph export complete:")
-    print(f"   • Edges → {out_edge_csv}")
-    print(f"   • Node mappings → {out_nodemap_csv}")
-    print(f"   • Node types → {out_nodetype_csv}")
-    print(f"   • Node type mapping → {out_nodetypemapping_csv}")
-    print(f"   • Relation mapping → {out_relmap_csv}")
-    print(f"   • Datasource mapping → {out_sourcemap_csv}")
-    print(f"   • Skipped edges log → {out_skipped_csv}")
+    write_edgelist(edge_dict, f"{out_prefix}_edgelist.csv")
+    write_static_edgelist(static_edge_dict, f"{out_prefix}_static_edgelist.csv")
+    write_node_types(node_type_dict, f"{out_prefix}_nodetype.csv")
+    write_relation_mapping(rel_type_dict, f"{out_prefix}_edgemapping.csv")
+    write_node_type_mapping(node_type_mapping, f"{out_prefix}_nodemapping.csv")
 
 
-# ===========================================================
-# ENTRY POINT
-# ===========================================================
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Construct a Temporal Heterogeneous Graph (THGL) from Open Targets.")
-    parser.add_argument("--data_dir", type=str, required=True, help="Base directory containing data/kg_output/edges/")
+    parser = argparse.ArgumentParser(
+        description="Construct a temporal heterogeneous graph from Open Targets."
+    )
+    parser.add_argument(
+        "--data_dir",
+        type=str,
+        required=True,
+        help="Base directory containing data"
+    )
     args = parser.parse_args()
 
     main(args.data_dir)
