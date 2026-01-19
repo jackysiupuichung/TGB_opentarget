@@ -20,15 +20,19 @@ else
 fi
 
 # === Input directory ===
-INPUT_DIR="/data/scratch/bty414/opentarget_evidences/23.06"
+INPUT_DIR="/data/scratch/bty414/opentarget_evidences/23.06/progression_graph"
+OUTPUT_DIR="/data/scratch/bty414/opentarget_evidences/23.06/thgl_opentargets"
 
 
 echo "📂 Input directory:  $INPUT_DIR"
+echo "📂 Output directory:  $OUTPUT_DIR"
 
 # === Run THGL builder ===
 echo "🚧 Building Temporal Heterogeneous Graph..."
 python tgb/datasets/thgl_opentargets/thgl_opentargets.py \
-    --data_dir "$INPUT_DIR" \
+    --dynamic_path "$INPUT_DIR/source_level_progression_dynamic.parquet" \
+    --static_path "$INPUT_DIR/source_level_progression_static.parquet" \
+    --out_dir "$OUTPUT_DIR"
 
 # === Final status ===
 echo
