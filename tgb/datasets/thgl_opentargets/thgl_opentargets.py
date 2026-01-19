@@ -27,14 +27,21 @@ import pandas as pd
 # GRAPH CONSTRUCTION
 # ===========================================================
 
-def build_combined_edgelist(dynamic_edges: pd.DataFrame, static_edges: pd.DataFrame):
+# ===========================================================
+# GRAPH CONSTRUCTION
+# ===========================================================
+
+def build_combined_edgelist(dynamic_edges: pd.DataFrame, static_edges: pd.DataFrame, mode: str = "combine"):
     """Build temporal edge dict and id mappings.
+
+    Args:
+        mode: 'combine' (rel + ds = unique edge type) or 'separate' (rel = edge type, ds = feature)
 
     Returns:
         node_dict           {node_name: node_id}
         node_type_dict      {node_id: node_type_id}
         edge_dict           {year: {(u, v, r, ds, s): 1}}
-        rel_type_dict       {relation_name: rel_id}
+        rel_type_dict       {relation_key: rel_id} (key is str or tuple depending on mode)
         ds_type_dict        {datasource_name: ds_id}
         node_type_mapping   {node_type_name: node_type_id}
     """
@@ -54,10 +61,15 @@ def build_combined_edgelist(dynamic_edges: pd.DataFrame, static_edges: pd.DataFr
             node_type_dict[node_dict[name]] = node_type_mapping[ntype]
         return node_dict[name]
 
-    def get_rel_id(rel):
-        if rel not in rel_type_dict:
-            rel_type_dict[rel] = len(rel_type_dict)
-        return rel_type_dict[rel]
+    def get_rel_id(rel, ds):
+        if mode == "combine":
+            key = f"{rel}::{ds}"
+        else:
+            key = rel
+            
+        if key not in rel_type_dict:
+            rel_type_dict[key] = len(rel_type_dict)
+        return rel_type_dict[key]
 
     def get_ds_id(ds):
         if ds not in ds_type_dict:
@@ -65,24 +77,24 @@ def build_combined_edgelist(dynamic_edges: pd.DataFrame, static_edges: pd.DataFr
         return ds_type_dict[ds]
 
     # 1) Dynamic edges
-    print("Processing dynamic edges...")
+    print(f"Processing dynamic edges (mode={mode})...")
     for _, row in dynamic_edges.iterrows():
         ts = int(row["year"])
         u = get_node_id(row["sourceId"], row["source_type"])
         v = get_node_id(row["targetId"], row["target_type"])
-        r = get_rel_id(row["relation"])
+        r = get_rel_id(row["relation"], row["datasourceId"])
         ds = get_ds_id(row["datasourceId"])
         s = float(row["score"])
         edge_dict[ts][(u, v, r, ds, s)] = 1
 
     # 2) Static edges duplicated across dynamic years
-    print("Processing static edges (duplicating across all dynamic years)...")
+    print(f"Processing static edges (duplicating across all dynamic years)...")
     unique_years = sorted(edge_dict.keys())
 
     for _, row in static_edges.iterrows():
         u = get_node_id(row["sourceId"], row["source_type"])
         v = get_node_id(row["targetId"], row["target_type"])
-        r = get_rel_id(row["relation"])
+        r = get_rel_id(row["relation"], row["datasourceId"])
         ds = get_ds_id(row["datasourceId"])
         s = float(row["score"])
 
@@ -101,6 +113,7 @@ def build_combined_edgelist(dynamic_edges: pd.DataFrame, static_edges: pd.DataFr
         print(f"  Nodes: {num_nodes:,}")
         print("  Years: 0")
     print(f"  Total temporal edges (after duplication): {total_edges:,}")
+    print(f"  Unique Relationship Types: {len(rel_type_dict)}")
 
     return node_dict, node_type_dict, edge_dict, rel_type_dict, ds_type_dict, node_type_mapping
 
@@ -159,7 +172,7 @@ def write_node_type_mapping(node_type_mapping, outname):
 # MAIN
 # ===========================================================
 
-def main(dynamic_path, static_path, out_dir):
+def main(dynamic_path, static_path, out_dir, mode):
     out_prefix = os.path.join(out_dir, "thgl-opentargets")
     os.makedirs(out_dir, exist_ok=True)
 
@@ -176,7 +189,7 @@ def main(dynamic_path, static_path, out_dir):
         rel_type_dict,
         ds_type_dict,
         node_type_mapping,
-    ) = build_combined_edgelist(dynamic_edges, static_edges)
+    ) = build_combined_edgelist(dynamic_edges, static_edges, mode)
 
     write_edgelist(edge_dict, f"{out_prefix}_edgelist.csv")
     write_node_types(node_type_dict, f"{out_prefix}_nodetype.csv")
@@ -190,6 +203,8 @@ if __name__ == "__main__":
     parser.add_argument("--dynamic_path", type=str, required=True, help="Path to dynamic edges parquet")
     parser.add_argument("--static_path", type=str, required=True, help="Path to static edges parquet")
     parser.add_argument("--out_dir", type=str, default="datasets/thgl_opentargets", help="Output directory")
+    parser.add_argument("--mode", type=str, default="combine", choices=["combine", "separate"], 
+                        help="Edge construction mode: 'combine' (rel+ds) or 'separate' (rel only). Default: combine")
     args = parser.parse_args()
 
-    main(args.dynamic_path, args.static_path, args.out_dir)
+    main(args.dynamic_path, args.static_path, args.out_dir, args.mode)
