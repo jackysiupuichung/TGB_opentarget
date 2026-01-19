@@ -1,6 +1,6 @@
 [project]
 name = "py-tgb"
-version = "2.1.0"
+version = "2.1.1"
 description = "Temporal Graph Benchmark project repo"
 authors = [
     { name = "shenyang Huang", email = "shenyang.huang@mail.mcgill.ca" },
@@ -14,7 +14,7 @@ readme = "README.md"
 dependencies = [
     "torch-geometric>=2.3.0,<3",
     "tqdm>=4.65.0,<5",
-    "numpy>=2.0.2,<3",
+    "numpy>=1.24.2,<2",
     "clint>=0.5.1,<0.6",
     "requests>=2.28.2,<3",
     "pandas>=2.2.3",

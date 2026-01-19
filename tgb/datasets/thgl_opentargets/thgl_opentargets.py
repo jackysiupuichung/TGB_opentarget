@@ -1,186 +1,127 @@
 #!/usr/bin/env python3
 """
-Construct a Temporal Heterogeneous Graph (THGL) from Open Targets evidence
-(dynamic edges only).
+Construct a Temporal Heterogeneous Graph (THGL) from Open Targets evidence.
 
 Time is represented as discrete yearly snapshots.
-Static edges are ignored in this version.
+
+This script supports dynamic edges plus optional static edges (static edges are
+duplicated across all observed dynamic years).
+
+Output files (prefix: thgl-opentargets):
+- *_edgelist.csv: timestamp, head, tail, relation, datasource, score
+- *_nodetype.csv: node_id, type
+- *_edgemapping.csv: relation_name, relation_id
+- *_datasourcemapping.csv: datasource_name, datasource_id
+- *_nodemapping.csv: node_type_name, node_type_id
 """
 
 import argparse
 import csv
 import os
-import pandas as pd
 from collections import defaultdict
 
-
-# ===========================================================
-# IO
-# ===========================================================
-def load_opentargets_parquet(fname):
-    df = pd.read_parquet(fname)
-    print(f"Loaded {len(df):,} rows from {fname}")
-    return df
-
-
-def extract_dynamic_edges(df):
-    dynamic = df[df["year"].notna()].reset_index(drop=True)
-    print(f"Dynamic edges: {len(dynamic):,}")
-    return dynamic
-
-def extract_static_edges(df):
-    static = df[df["year"].isna()].reset_index(drop=True)
-    print(f"Static edges: {len(static):,}")
-    return static
+import pandas as pd
 
 
 # ===========================================================
-# GRAPH CONSTRUCTION (GitHub-style temporal snapshots)
+# GRAPH CONSTRUCTION
 # ===========================================================
-def load_edgelist(dynamic_edges):
-    """
+
+def build_combined_edgelist(dynamic_edges: pd.DataFrame, static_edges: pd.DataFrame):
+    """Build temporal edge dict and id mappings.
+
     Returns:
         node_dict           {node_name: node_id}
         node_type_dict      {node_id: node_type_id}
-        edge_dict           {year: {(h, t, r): 1}}
+        edge_dict           {year: {(u, v, r, ds, s): 1}}
         rel_type_dict       {relation_name: rel_id}
+        ds_type_dict        {datasource_name: ds_id}
         node_type_mapping   {node_type_name: node_type_id}
     """
+
     node_dict = {}
     node_type_dict = {}
     node_type_mapping = {}
     rel_type_dict = {}
+    ds_type_dict = {}
     edge_dict = defaultdict(dict)
 
-    num_edges = 0
+    def get_node_id(name, ntype):
+        if ntype not in node_type_mapping:
+            node_type_mapping[ntype] = len(node_type_mapping)
+        if name not in node_dict:
+            node_dict[name] = len(node_dict)
+            node_type_dict[node_dict[name]] = node_type_mapping[ntype]
+        return node_dict[name]
 
+    def get_rel_id(rel):
+        if rel not in rel_type_dict:
+            rel_type_dict[rel] = len(rel_type_dict)
+        return rel_type_dict[rel]
+
+    def get_ds_id(ds):
+        if ds not in ds_type_dict:
+            ds_type_dict[ds] = len(ds_type_dict)
+        return ds_type_dict[ds]
+
+    # 1) Dynamic edges
+    print("Processing dynamic edges...")
     for _, row in dynamic_edges.iterrows():
         ts = int(row["year"])
-        head = row["sourceId"]
-        tail = row["targetId"]
-        # combination of data source and relation type
-        rel = row["relation_key"]
+        u = get_node_id(row["sourceId"], row["source_type"])
+        v = get_node_id(row["targetId"], row["target_type"])
+        r = get_rel_id(row["relation"])
+        ds = get_ds_id(row["datasourceId"])
+        s = float(row["score"])
+        edge_dict[ts][(u, v, r, ds, s)] = 1
 
-        head_type = row["source_type"]
-        tail_type = row["target_type"]
-
-        # node types
-        for t in (head_type, tail_type):
-            if t not in node_type_mapping:
-                node_type_mapping[t] = len(node_type_mapping)
-
-        # nodes
-        if head not in node_dict:
-            node_dict[head] = len(node_dict)
-            node_type_dict[node_dict[head]] = node_type_mapping[head_type]
-
-        if tail not in node_dict:
-            node_dict[tail] = len(node_dict)
-            node_type_dict[node_dict[tail]] = node_type_mapping[tail_type]
-
-        # relations
-        if rel not in rel_type_dict:
-            rel_type_dict[rel] = len(rel_type_dict)
-
-        edge = (
-            node_dict[head],
-            node_dict[tail],
-            rel_type_dict[rel]
-        )
-
-        edge_dict[ts][edge] = 1
-        num_edges += 1
-
-    print(f"There are {len(node_dict):,} nodes")
-    print(f"There are {num_edges:,} temporal edges")
-    print(f"There are {len(edge_dict):,} timesteps")
-
-    return node_dict, node_type_dict, edge_dict, rel_type_dict, node_type_mapping
-
-def load_static_edgelist(static_edges, node_dict, node_type_dict, rel_type_dict, node_type_mapping):
-    """
-    Update the existing dictionaries with static edges.
-    Returns:
-        node_dict           {node_name: node_id}
-        node_type_dict      {node_id: node_type_id}
-        edge_dict           {year: {(h, t, r): 1}}
-        rel_type_dict       {relation_name: rel_id}
-        node_type_mapping   {node_type_name: node_type_id}
-    """
-    static_edge_dict = defaultdict(dict)
-    num_static_edges = 0
+    # 2) Static edges duplicated across dynamic years
+    print("Processing static edges (duplicating across all dynamic years)...")
+    unique_years = sorted(edge_dict.keys())
 
     for _, row in static_edges.iterrows():
-        head = row["sourceId"]
-        tail = row["targetId"]
-        rel = row["relation_key"]
+        u = get_node_id(row["sourceId"], row["source_type"])
+        v = get_node_id(row["targetId"], row["target_type"])
+        r = get_rel_id(row["relation"])
+        ds = get_ds_id(row["datasourceId"])
+        s = float(row["score"])
 
-        head_type = row["source_type"]
-        tail_type = row["target_type"]
+        for yr in unique_years:
+            edge_dict[yr][(u, v, r, ds, s)] = 1
 
-        # node types
-        for t in (head_type, tail_type):
-            if t not in node_type_mapping:
-                node_type_mapping[t] = len(node_type_mapping)
+    num_nodes = len(node_dict)
+    num_years = len(unique_years)
+    total_edges = sum(len(edges) for edges in edge_dict.values())
 
-        # nodes
-        if head not in node_dict:
-            node_dict[head] = len(node_dict)
-            node_type_dict[node_dict[head]] = node_type_mapping[head_type]
+    print("Graph summary:")
+    if unique_years:
+        print(f"  Nodes: {num_nodes:,}")
+        print(f"  Years: {num_years} ({unique_years[0]} to {unique_years[-1]})")
+    else:
+        print(f"  Nodes: {num_nodes:,}")
+        print("  Years: 0")
+    print(f"  Total temporal edges (after duplication): {total_edges:,}")
 
-        if tail not in node_dict:
-            node_dict[tail] = len(node_dict)
-            node_type_dict[node_dict[tail]] = node_type_mapping[tail_type]
+    return node_dict, node_type_dict, edge_dict, rel_type_dict, ds_type_dict, node_type_mapping
 
-        # relations
-        if rel not in rel_type_dict:
-            rel_type_dict[rel] = len(rel_type_dict)
-
-        edge = (
-            node_dict[head],
-            node_dict[tail],
-            rel_type_dict[rel]
-        )
-
-        # Static edges can be assigned to a special timestamp, e.g., 0
-        static_edge_dict[0][edge] = 1
-        num_static_edges += 1
-
-    print(f"After adding static edges:")
-    print(f"There are {len(node_dict):,} nodes")
-    print(f"There are {num_static_edges:,} static edges added")
-    print(f"There are {len(static_edge_dict):,} timesteps")
-
-    return node_dict, node_type_dict, static_edge_dict, rel_type_dict, node_type_mapping
 
 # ===========================================================
 # WRITERS
 # ===========================================================
+
 def write_edgelist(edge_dict, outname):
     num_lines = 0
     with open(outname, "w") as f:
         writer = csv.writer(f)
-        writer.writerow(["timestamp", "head", "tail", "relation_type"])
+        writer.writerow(["timestamp", "head", "tail", "relation", "datasource", "score"])
 
         for ts in sorted(edge_dict):
-            for h, t, r in edge_dict[ts]:
-                writer.writerow([ts, h, t, r])
+            for h, t, r, ds, s in edge_dict[ts]:
+                writer.writerow([ts, h, t, r, ds, s])
                 num_lines += 1
 
     print(f"Wrote {num_lines:,} edges → {outname}")
 
-def write_static_edgelist(static_edge_dict, outname):
-    num_lines = 0
-    with open(outname, "w") as f:
-        writer = csv.writer(f)
-        writer.writerow(["timestamp", "head", "tail", "relation_type"])
-
-        for ts in sorted(static_edge_dict):
-            for h, t, r in static_edge_dict[ts]:
-                writer.writerow([ts, h, t, r])
-                num_lines += 1
-
-    print(f"Wrote {num_lines:,} static edges → {outname}")
 
 def write_node_types(node_type_dict, outname):
     with open(outname, "w") as f:
@@ -198,6 +139,14 @@ def write_relation_mapping(rel_type_dict, outname):
             writer.writerow([r, rid])
 
 
+def write_datasource_mapping(ds_type_dict, outname):
+    with open(outname, "w") as f:
+        writer = csv.writer(f)
+        writer.writerow(["datasource_name", "datasource_id"])
+        for ds, dsid in ds_type_dict.items():
+            writer.writerow([ds, dsid])
+
+
 def write_node_type_mapping(node_type_mapping, outname):
     with open(outname, "w") as f:
         writer = csv.writer(f)
@@ -209,43 +158,38 @@ def write_node_type_mapping(node_type_mapping, outname):
 # ===========================================================
 # MAIN
 # ===========================================================
-def main(data_dir):
-    parquet_file = os.path.join(
-        data_dir,
-        "progression_graph",
-        "datasource_harmonic.parquet"
-    )
 
-    out_prefix = os.path.join(data_dir, "thgl", "thgl-opentargets")
+def main(dynamic_path, static_path, out_dir):
+    out_prefix = os.path.join(out_dir, "thgl-opentargets")
+    os.makedirs(out_dir, exist_ok=True)
 
-    df = load_opentargets_parquet(parquet_file)
-    dynamic_edges = extract_dynamic_edges(df)
-    static_edges = extract_static_edges(df)
+    print(f"Loading dynamic edges from {dynamic_path}...")
+    dynamic_edges = pd.read_parquet(dynamic_path)
 
-    node_dict, node_type_dict, edge_dict, rel_type_dict, node_type_mapping = load_edgelist(dynamic_edges)
-    node_dict, node_type_dict, static_edge_dict, rel_type_dict, node_type_mapping = load_static_edgelist(
-        static_edges, node_dict, node_type_dict, rel_type_dict, node_type_mapping
-    )
+    print(f"Loading static edges from {static_path}...")
+    static_edges = pd.read_parquet(static_path)
 
-    # placeholder for finding node features from node_dict
+    (
+        node_dict,
+        node_type_dict,
+        edge_dict,
+        rel_type_dict,
+        ds_type_dict,
+        node_type_mapping,
+    ) = build_combined_edgelist(dynamic_edges, static_edges)
 
     write_edgelist(edge_dict, f"{out_prefix}_edgelist.csv")
-    write_static_edgelist(static_edge_dict, f"{out_prefix}_static_edgelist.csv")
     write_node_types(node_type_dict, f"{out_prefix}_nodetype.csv")
     write_relation_mapping(rel_type_dict, f"{out_prefix}_edgemapping.csv")
+    write_datasource_mapping(ds_type_dict, f"{out_prefix}_datasourcemapping.csv")
     write_node_type_mapping(node_type_mapping, f"{out_prefix}_nodemapping.csv")
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        description="Construct a temporal heterogeneous graph from Open Targets."
-    )
-    parser.add_argument(
-        "--data_dir",
-        type=str,
-        required=True,
-        help="Base directory containing data"
-    )
+    parser = argparse.ArgumentParser(description="Construct a temporal heterogeneous graph from Open Targets.")
+    parser.add_argument("--dynamic_path", type=str, required=True, help="Path to dynamic edges parquet")
+    parser.add_argument("--static_path", type=str, required=True, help="Path to static edges parquet")
+    parser.add_argument("--out_dir", type=str, default="datasets/thgl_opentargets", help="Output directory")
     args = parser.parse_args()
 
-    main(args.data_dir)
+    main(args.dynamic_path, args.static_path, args.out_dir)
